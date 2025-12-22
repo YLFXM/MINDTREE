@@ -1,0 +1,122 @@
+﻿//{{NO_DEPENDENCIES}}
+// Microsoft Visual C++ 生成的包含文件。
+// 供 MINDTREE.rc 使用
+//
+#define IDC_MYICON                      2
+#define IDC_CONTENTTREE                 2
+#define IDD_MINDTREE_DIALOG             102
+#define IDS_APP_TITLE                   103
+#define IDD_ABOUTBOX                    103
+#define IDM_ABOUT                       104
+#define IDD_TOOLS                       104
+#define IDM_EXIT                        105
+#define IDD_GUIDE                       105
+#define IDD_EXPLAIN                     107
+#define IDD_OLE_PROPPAGE_LARGE          108
+#define IDD_STYLE                       108
+#define IDC_MINDTREE                    109
+#define IDR_MAINFRAME                   128
+#define IDI_close                       136
+#define IDI_mate                        137
+#define IDI_parent                      138
+#define IDI_return                      139
+#define IDI_sub                         140
+#define IDI_thetree                     141
+#define IDI_close1616                   143
+#define IDI_TORIGHT                     145
+#define IDI_TOLEFT                      146
+#define IDC_treeview                    1006
+#define IDC_expclose                    1011
+#define IDC_TREE1                       1024
+#define IDM_TOOLS                       32774
+#define ID_Menu                         32775
+#define IDM_OPENGUIDE                    32776
+#define IDI_RIGHT                       32777
+#define IDM_SAVEAS                      32783
+#define IDM_OPEN                        32784
+#define IDM_SAVE                        32785
+#define IDM_CLOSEFILE                   32786
+#define IDM_NEWFILE                     32787
+#define IDM_NEWPAGE                     32788
+#define IDM_CLOSE                       32790
+#define IDM_CANCEL                      32805
+#define IDM_REWIND                      32806
+#define IDM_CUT                         32807
+#define IDM_COPY                        32808
+#define IDM_PASTE                       32809
+#define IDM_DELETESUB                   32810
+#define IDM_DELETE                      32811
+#define IDM_RETURN                      32812
+#define IDM_ALL                         32813
+#define IDM_SEARCH                      32814
+#define IDM_NEWPAGEANDNEWFILE           32842
+#define IDM_NEWPAGEANDFILE              32843
+#define IDM_SUB                         32844
+#define IDM_WORKMATE                    32845
+#define IDM_PARENT                      32846
+#define IDM_FREETOPIC                   32847
+#define IDM_LABEL                       32848
+#define IDM_ANNOTATION                  32850
+#define IDM_SUMMRY                      32851
+#define IDM_LINK                        32852
+#define IDM_NOTE                        32855
+#define IDM_OUTLINKPAGE                 32856
+#define IDM_OUTLINKFILE                 32857
+#define IDM_OUTLINKTOPIC                32858
+#define IDM_NEWPAINT                    32860
+#define IDM_NEWPAINTWITHTOPIC           32861
+#define IDM_LARGER                      32862
+#define IDM_SMALLER                     32863
+#define IDM_ADAPT                       32865
+#define IDM_LINEONLY                    32866
+#define IDM_GUIDETOPIC                  32867
+#define IDM_GUIDENOTE                   32868
+#define IDM_GUIDELABEL                  32869
+#define IDM_QUESTION                    32870
+#define IDM_EDITSTYLE                   32871
+#define IDM_EDITPAINT                   32872
+#define IDM_CLOSETOOLS                  32873
+#define IDM_CLOSEGUIDE                  32874
+#define IDM_CLOSESTYLE                  32875
+#define IDM_SHAPE                       32876
+#define IDM_FILL                        32877
+#define IDM_FRAME                       32878
+#define IDM_FRAMETHICK                  32879
+#define IDM_FRAMECOLOR                  32880
+#define IDM_TEXTTHICK                   32881
+#define IDM_TEXTSIZE                    32882
+#define IDM_TEXTSTYLE                   32883
+#define IDM_TEXTALIGN                   32884
+#define IDM_TEXTCOLOR                   32885
+#define IDM_FONT                        32886
+#define IDM_STRUCTURE                   32887
+#define IDM_DIRECTION                   32888
+#define IDM_LINESHAPE                   32889
+#define IDM_LINECOLOR                   32890
+#define IDM_BACKCOLOR                   32891
+#define IDM_LAYOUT                      32892
+#define IDM_G_SEARCH                    32893
+#define IDM_BOLD                        32894
+#define IDM_ITALIC                      32895
+#define IDM_UNDERLINE                   32896
+#define IDM_BRANCH_THICK                32897
+#define IDM_BRANCH_COLOR                32898
+#define IDM_PRESET                      32899
+#define IDM_AUTO_BALANCE                32900
+#define IDM_COMPACT_LAYOUT              32901
+#define IDM_SIBLING_ALIGN               32902
+#define IDM_OPENTOOLS                   32903
+#define IDM_OPENSTYLE                   32904
+#define IDC_STATIC                      -1
+
+// Next default values for new objects
+// 
+#ifdef APSTUDIO_INVOKED
+#ifndef APSTUDIO_READONLY_SYMBOLS
+#define _APS_NO_MFC                     1
+#define _APS_NEXT_RESOURCE_VALUE        147
+#define _APS_NEXT_COMMAND_VALUE         32778
+#define _APS_NEXT_CONTROL_VALUE         1025
+#define _APS_NEXT_SYMED_VALUE           110
+#endif
+#endif
