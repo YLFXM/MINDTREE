@@ -514,14 +514,29 @@ public:
             RestoreSnapshot(current);
             HistorySystem::Instance().SetStateOrReset(std::move(snaps), cur, current);
 
-            // Sync to PageInfo
+            // Sync to PageInfo -> store current root/freeNodes into active paint
             if (currentPageIndex >= 0 && currentPageIndex < pages.size()) {
-                pages[currentPageIndex].root = root;
-                pages[currentPageIndex].freeNodes = freeNodes;
-                pages[currentPageIndex].nextId = nextId;
-                pages[currentPageIndex].filePath = filePath;
+                PageInfo& page = pages[currentPageIndex];
+                int active = page.activePaintIndex;
+                if (active < 0 || active >= (int)page.paints.size()) {
+                    // ensure at least one paint exists
+                    PaintInfo p;
+                    p.id = 1;
+                    p.nextId = nextId;
+                    p.root = root;
+                    p.freeNodes = freeNodes;
+                    p.title = L"Default Paint";
+                    page.paints.clear();
+                    page.paints.push_back(p);
+                    page.activePaintIndex = 0;
+                } else {
+                    page.paints[active].root = root;
+                    page.paints[active].freeNodes = freeNodes;
+                    page.paints[active].nextId = nextId;
+                }
+                page.filePath = filePath;
                 size_t lastSlash = filePath.find_last_of(L"\\/");
-                pages[currentPageIndex].title = (lastSlash != std::wstring::npos) ? filePath.substr(lastSlash + 1) : filePath;
+                page.title = (lastSlash != std::wstring::npos) ? filePath.substr(lastSlash + 1) : filePath;
             }
             return true;
         }
@@ -544,6 +559,28 @@ public:
         std::wstring line;
         std::map<int, MindNode*> idMap;
         int maxId = 0;
+
+        auto Unescape = [](const std::wstring& in) -> std::wstring {
+            std::wstring out;
+            out.reserve(in.size());
+            for (size_t i = 0; i < in.size(); ++i) {
+                wchar_t c = in[i];
+                if (c == L'\\' && i + 1 < in.size()) {
+                    wchar_t n = in[i + 1];
+                    if (n == L'\\') { out.push_back(L'\\'); i++; continue; }
+                    if (n == L't') { out.push_back(L'\t'); i++; continue; }
+                    if (n == L'n') { out.push_back(L'\n'); i++; continue; }
+                    if (n == L'r') { out.push_back(L'\r'); i++; continue; }
+                }
+                out.push_back(c);
+            }
+            return out;
+        };
+
+        auto ToIntOrDefault = [](const std::wstring& s, int def) -> int {
+            if (s.empty()) return def;
+            try { return std::stoi(s); } catch(...) { return def; }
+        };
 
         try {
             while (std::getline(file, line)) {
@@ -602,13 +639,28 @@ public:
         // Reset operation-log history for legacy files.
         HistorySystem::Instance().ResetToSnapshot(CreateSnapshot());
 
+        // Sync to PageInfo active paint
         if (currentPageIndex >= 0 && currentPageIndex < pages.size()) {
-            pages[currentPageIndex].root = root;
-            pages[currentPageIndex].freeNodes = freeNodes;
-            pages[currentPageIndex].nextId = nextId;
-            pages[currentPageIndex].filePath = filePath;
+            PageInfo& page = pages[currentPageIndex];
+            int active = page.activePaintIndex;
+            if (active < 0 || active >= (int)page.paints.size()) {
+                PaintInfo p;
+                p.id = 1;
+                p.nextId = nextId;
+                p.root = root;
+                p.freeNodes = freeNodes;
+                p.title = L"Default Paint";
+                page.paints.clear();
+                page.paints.push_back(p);
+                page.activePaintIndex = 0;
+            } else {
+                page.paints[active].root = root;
+                page.paints[active].freeNodes = freeNodes;
+                page.paints[active].nextId = nextId;
+            }
+            page.filePath = filePath;
             size_t lastSlash = filePath.find_last_of(L"\\/");
-            pages[currentPageIndex].title = (lastSlash != std::wstring::npos) ? filePath.substr(lastSlash + 1) : filePath;
+            page.title = (lastSlash != std::wstring::npos) ? filePath.substr(lastSlash + 1) : filePath;
         }
 
         return true;
@@ -657,6 +709,11 @@ public:
             return out;
         };
 
+        auto ToIntOrDefault = [](const std::wstring& s, int def) -> int {
+            if (s.empty()) return def;
+            try { return std::stoi(s); } catch(...) { return def; }
+        };
+
         try {
             while (std::getline(ss, line)) {
                 if (line.empty()) continue;
@@ -680,20 +737,64 @@ public:
                     if (parts.size() >= 5) newNode->note = Unescape(parts[4]);
                     if (parts.size() >= 6) newNode->outlinkFile = Unescape(parts[5]);
                     if (parts.size() >= 7) newNode->outlinkPage = Unescape(parts[6]);
-                    if (parts.size() >= 8) newNode->outlinkTopicId = std::stoi(parts[7]);
+                    if (parts.size() >= 8) newNode->outlinkTopicId = ToIntOrDefault(parts[7], 0);
                     if (parts.size() >= 9) newNode->paintPath = Unescape(parts[8]);
                     if (parts.size() >= 10) newNode->summary = Unescape(parts[9]);
                     if (parts.size() >= 11) newNode->frameStyle = Unescape(parts[10]);
                     if (parts.size() >= 12) newNode->outlinkURL = Unescape(parts[11]);
                     if (parts.size() >= 13) newNode->annotation = Unescape(parts[12]);
-                    if (parts.size() >= 14) {
-                        std::wstring ids = parts[13];
+
+                    // New: style fields (added after annotation)
+                    // Indices:
+                    // 13: style.x
+                    // 14: style.y
+                    // 15: style.width
+                    // 16: style.height
+                    // 17: style.shape
+                    // 18: style.fillColor
+                    // 19: style.borderWidth
+                    // 20: style.borderColor
+                    // 21: style.borderStyle
+                    // 22: style.fontFamily
+                    // 23: style.fontSize
+                    // 24: style.textColor
+                    // 25: style.bold (1/0)
+                    // 26: style.italic (1/0)
+                    // 27: style.underline (1/0)
+                    // 28: style.textAlignment
+                    // 29: style.branchWidth
+                    // 30: style.branchColor
+                    // 31: style.nodeStructure
+                    // 32: linkedNodeIds (comma separated)
+
+                    if (parts.size() >= 14) newNode->style.x = ToIntOrDefault(parts[13], newNode->style.x);
+                    if (parts.size() >= 15) newNode->style.y = ToIntOrDefault(parts[14], newNode->style.y);
+                    if (parts.size() >= 16) newNode->style.width = ToIntOrDefault(parts[15], newNode->style.width);
+                    if (parts.size() >= 17) newNode->style.height = ToIntOrDefault(parts[16], newNode->style.height);
+                    if (parts.size() >= 18) newNode->style.shape = Unescape(parts[17]);
+                    if (parts.size() >= 19) newNode->style.fillColor = Unescape(parts[18]);
+                    if (parts.size() >= 20) newNode->style.borderWidth = ToIntOrDefault(parts[19], newNode->style.borderWidth);
+                    if (parts.size() >= 21) newNode->style.borderColor = Unescape(parts[20]);
+                    if (parts.size() >= 22) newNode->style.borderStyle = Unescape(parts[21]);
+                    if (parts.size() >= 23) newNode->style.fontFamily = Unescape(parts[22]);
+                    if (parts.size() >= 24) newNode->style.fontSize = ToIntOrDefault(parts[23], newNode->style.fontSize);
+                    if (parts.size() >= 25) newNode->style.textColor = Unescape(parts[24]);
+                    if (parts.size() >= 26) newNode->style.bold = (parts[25] == L"1");
+                    if (parts.size() >= 27) newNode->style.italic = (parts[26] == L"1");
+                    if (parts.size() >= 28) newNode->style.underline = (parts[27] == L"1");
+                    if (parts.size() >= 29) newNode->style.textAlignment = Unescape(parts[28]);
+                    if (parts.size() >= 30) newNode->style.branchWidth = ToIntOrDefault(parts[29], newNode->style.branchWidth);
+                    if (parts.size() >= 31) newNode->style.branchColor = Unescape(parts[30]);
+                    if (parts.size() >= 32) newNode->style.nodeStructure = Unescape(parts[31]);
+
+                    if (parts.size() >= 33) {
+                        std::wstring ids = parts[32];
                         size_t start = 0;
                         while (start < ids.size()) {
                             size_t comma = ids.find(L',', start);
                             std::wstring part = (comma == std::wstring::npos) ? ids.substr(start) : ids.substr(start, comma - start);
                             if (!part.empty()) {
-                                newNode->linkedNodeIds.push_back(std::stoi(part));
+                                try { newNode->linkedNodeIds.push_back(std::stoi(part)); } catch(...) {}
                             }
                             if (comma == std::wstring::npos) break;
                             start = comma + 1;
@@ -757,6 +858,26 @@ public:
            << L"\t" << Escape(node->frameStyle)
            << L"\t" << Escape(node->outlinkURL)
            << L"\t" << Escape(node->annotation)
+           // style fields
+           << L"\t" << node->style.x
+           << L"\t" << node->style.y
+           << L"\t" << node->style.width
+           << L"\t" << node->style.height
+           << L"\t" << Escape(node->style.shape)
+           << L"\t" << Escape(node->style.fillColor)
+           << L"\t" << node->style.borderWidth
+           << L"\t" << Escape(node->style.borderColor)
+           << L"\t" << Escape(node->style.borderStyle)
+           << L"\t" << Escape(node->style.fontFamily)
+           << L"\t" << node->style.fontSize
+           << L"\t" << Escape(node->style.textColor)
+           << L"\t" << (node->style.bold ? 1 : 0)
+           << L"\t" << (node->style.italic ? 1 : 0)
+           << L"\t" << (node->style.underline ? 1 : 0)
+           << L"\t" << Escape(node->style.textAlignment)
+           << L"\t" << node->style.branchWidth
+           << L"\t" << Escape(node->style.branchColor)
+           << L"\t" << Escape(node->style.nodeStructure)
            << L"\t";
 
         for (size_t i = 0; i < node->linkedNodeIds.size(); ++i) {
@@ -770,26 +891,56 @@ public:
         }
     }
 
-    // Page Management
-    struct PageInfo {
+	//Paint Management
+    struct PaintInfo {
+        int id;
         MindNode* root;
         std::vector<MindNode*> freeNodes;
         std::wstring title;
-        std::wstring filePath;
         int nextId;
     };
 
+    // Page Management
+    struct PageInfo {
+        std::vector<PaintInfo> paints;
+        std::wstring title;
+        std::wstring filePath;
+        int activePaintIndex;
+    };
+
     void AddNewPage() {
-        // Sync current
+        // Sync current (store active paint for current page)
         if (currentPageIndex >= 0 && currentPageIndex < pages.size()) {
-            pages[currentPageIndex].root = root;
-            pages[currentPageIndex].freeNodes = freeNodes;
-            pages[currentPageIndex].nextId = nextId;
+            PageInfo& curPage = pages[currentPageIndex];
+            int active = curPage.activePaintIndex;
+            if (active < 0 || active >= (int)curPage.paints.size()) {
+                PaintInfo p;
+                p.id = 1;
+                p.nextId = nextId;
+                p.root = root;
+                p.freeNodes = freeNodes;
+                p.title = L"Default Paint";
+                curPage.paints.clear();
+                curPage.paints.push_back(p);
+                curPage.activePaintIndex = 0;
+            } else {
+                curPage.paints[active].root = root;
+                curPage.paints[active].freeNodes = freeNodes;
+                curPage.paints[active].nextId = nextId;
+            }
         }
         
         PageInfo page;
-        page.nextId = 1;
-        page.root = new MindNode(page.nextId++, L"Central Topic");
+        page.activePaintIndex = 0;
+
+        PaintInfo p;
+        p.id = 1;
+        p.nextId = 1;
+        p.root = new MindNode(p.nextId++, L"Central Topic");
+        p.freeNodes.clear();
+        p.title = L"Default Paint";
+        page.paints.push_back(p);
+
         page.title = L"Page " + std::to_wstring(pages.size() + 1);
         page.filePath = L"";
         pages.push_back(page);
@@ -800,17 +951,49 @@ public:
     void SwitchToPage(int index) {
         if (index < 0 || index >= pages.size()) return;
         
-        // Sync current before switching
+        // Sync current before switching (store current root/freeNodes into active paint)
         if (currentPageIndex >= 0 && currentPageIndex < pages.size()) {
-            pages[currentPageIndex].root = root;
-            pages[currentPageIndex].freeNodes = freeNodes;
-            pages[currentPageIndex].nextId = nextId;
+            PageInfo& curPage = pages[currentPageIndex];
+            int active = curPage.activePaintIndex;
+            if (active < 0 || active >= (int)curPage.paints.size()) {
+                PaintInfo p;
+                p.id = 1;
+                p.nextId = nextId;
+                p.root = root;
+                p.freeNodes = freeNodes;
+                p.title = L"Default Paint";
+                curPage.paints.clear();
+                curPage.paints.push_back(p);
+                curPage.activePaintIndex = 0;
+            } else {
+                curPage.paints[active].root = root;
+                curPage.paints[active].freeNodes = freeNodes;
+                curPage.paints[active].nextId = nextId;
+            }
         }
         
         currentPageIndex = index;
-        root = pages[index].root;
-        freeNodes = pages[index].freeNodes;
-        nextId = pages[index].nextId;
+
+        // Ensure the target page has at least one paint; if not, create a default paint
+        PageInfo& target = pages[index];
+        if (target.paints.empty()) {
+            PaintInfo p;
+            p.id = 1;
+            p.nextId = 1;
+            p.root = new MindNode(p.nextId++, L"Central Topic");
+            p.freeNodes.clear();
+            p.title = L"Default Paint";
+            target.paints.push_back(p);
+            target.activePaintIndex = 0;
+        }
+        if (target.activePaintIndex < 0 || target.activePaintIndex >= (int)target.paints.size()) {
+            target.activePaintIndex = 0;
+        }
+
+        PaintInfo& activePaint = target.paints[target.activePaintIndex];
+        root = activePaint.root;
+        freeNodes = activePaint.freeNodes;
+        nextId = activePaint.nextId;
         
         // Update UI
         if (global::G_TREEVIEW) {
@@ -825,14 +1008,14 @@ public:
         }
         
         // Update Global File Path
-        global::currentFilePath = pages[index].filePath;
+        global::currentFilePath = target.filePath;
         
         // Update Window Title
         std::wstring title = L"MINDTREE";
         if (!global::currentFilePath.empty()) {
             title += L" - " + global::currentFilePath;
         } else {
-            title += L" - " + pages[index].title;
+            title += L" - " + target.title;
         }
         if (global::HOME) SetWindowText(global::HOME, title.c_str());
 
@@ -994,14 +1177,25 @@ private:
 
     MindMapManager() : currentPageIndex(0) {
         PageInfo page;
-        page.nextId = 1;
-        page.root = new MindNode(page.nextId++, L"Central Topic");
+        page.activePaintIndex = 0;
+
+        // initialize one paint for the first page
+        PaintInfo p;
+        p.id = 1;
+        p.nextId = 1;
+        p.root = new MindNode(p.nextId++, L"Central Topic");
+        p.freeNodes.clear();
+        p.title = L"Default Paint";
+        page.paints.push_back(p);
+
         page.title = L"Page 1";
         page.filePath = L"";
         pages.push_back(page);
         
-        root = pages[0].root;
-        nextId = pages[0].nextId;
+        // set manager state to the first page's first paint
+        root = pages[0].paints[0].root;
+        freeNodes = pages[0].paints[0].freeNodes;
+        nextId = pages[0].paints[0].nextId;
     }
     
     std::vector<PageInfo> pages;

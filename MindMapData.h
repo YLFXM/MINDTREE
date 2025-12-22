@@ -4,45 +4,6 @@
 #include <windows.h>
 #include <commctrl.h>
 
-struct MindNode {
-    int id;//ID
-    std::wstring text;//文本
-    MindNode* parent;//父节点
-    std::vector<MindNode*> children;//子节点数组
-    HTREEITEM hTreeItem;
-    std::wstring label;//标签信息
-    std::wstring note;//笔记信息
-    std::wstring outlinkFile;//关联文件路径
-    std::wstring outlinkPage;//关联页面
-    int outlinkTopicId;//关联主题ID
-    std::wstring paintPath;//绘图路径
-    std::wstring summary;//摘要信息
-    std::wstring frameStyle;//框架样式
-    std::wstring outlinkURL;//关联网址
-    std::wstring annotation;//注释信息
-    std::vector<int> linkedNodeIds;
-
-    // 新增：节点样式
-    MindNodeStyle style;
-
-    MindNode(int id, std::wstring text, MindNode* parent = nullptr)
-        : id(id), text(std::move(text)), parent(parent), hTreeItem(NULL), outlinkTopicId(0) {
-        // 使用MindNodeStyle的默认构造函数初始化
-    }
-
-    ~MindNode() {
-        for (auto child : children) {
-            delete child;
-        }
-        children.clear();
-    }
-};
-
-struct MindFrame {
-    std::vector<int> nodeIds;
-    std::wstring style;
-};
-
 // 样式结构体：专门存储节点的样式信息
 struct MindNodeStyle {
     //节点位置属性
@@ -131,3 +92,44 @@ struct MindNodeStyle {
         return *this;
     }
 };
+
+
+struct MindNode {
+    int id;//ID
+    std::wstring text;//文本
+    MindNode* parent;//父节点
+    std::vector<MindNode*> children;//子节点数组
+    HTREEITEM hTreeItem;
+    std::wstring label;//标签信息
+    std::wstring note;//笔记信息
+    std::wstring outlinkFile;//关联文件路径
+    std::wstring outlinkPage;//关联页面
+    int outlinkTopicId;//关联主题ID
+    std::wstring paintPath;//绘图路径
+    std::wstring summary;//摘要信息
+    std::wstring frameStyle;//框架样式
+    std::wstring outlinkURL;//关联网址
+    std::wstring annotation;//注释信息
+    std::vector<int> linkedNodeIds;
+
+    // 新增：节点样式
+    MindNodeStyle style;
+
+    MindNode(int id, std::wstring text, MindNode* parent = nullptr)
+        : id(id), text(std::move(text)), parent(parent), hTreeItem(NULL), outlinkTopicId(0) {
+        // 使用MindNodeStyle的默认构造函数初始化
+    }
+
+    ~MindNode() {
+        for (auto child : children) {
+            delete child;
+        }
+        children.clear();
+    }
+};
+
+struct MindFrame {
+    std::vector<int> nodeIds;
+    std::wstring style;
+};
+

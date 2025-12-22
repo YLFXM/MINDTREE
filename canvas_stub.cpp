@@ -178,11 +178,8 @@ static void Canvas_EnsureWindow() {
 
     RECT rc; GetClientRect(global::HOME, &rc);
     g_canvasWnd = CreateWindowExW(0, CANVAS_CLASS_NAME, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0, 0, rc.right, rc.bottom, global::HOME, NULL, global::hInst, NULL);
-    TCITEM tie = {};
-    tie.mask = TCIF_TEXT;
-    tie.pszText = (LPWSTR)L"paint";
-    TabCtrl_InsertItem(global::CLOTH, 0, &tie);
+        200 * IsWindowVisible(global::GUIDE), 50 * IsWindowVisible(global::TOOLS), rc.right - rc.left - 200 * (IsWindowVisible(global::GUIDE) 
+            + IsWindowVisible(global::STYLE)), rc.bottom - rc.top - 50 * IsWindowVisible(global::TOOLS), global::HOME, NULL, global::hInst, NULL);
     //global::g_canvasWnd = g_canvasWnd;
 }
 
