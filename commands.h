@@ -23,6 +23,7 @@ void HandleLarger(HWND hWnd);
 void HandleSmaller(HWND hWnd);
 void HandleAdapt(HWND hWnd);
 void HandleLineOnly(HWND hWnd);
+void HandleStructure(HWND hWnd); // Added declaration
 
 // Link-mode helpers (used by canvas for hit-test completion and ESC cancel)
 bool LinkModeIsActive();

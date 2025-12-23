@@ -12,6 +12,7 @@
 #include "MindMapManager.h"
 #include "commands.h"
 #include "borderless_button.h"
+#include "canvas_impl.h" // Added for Canvas_ZoomBy
 
 namespace global {
     // 全局变量:
@@ -43,6 +44,11 @@ namespace global {
     RECT guide = { 0 };
     HWND S_TAB = NULL, S_CLOSE = NULL, S_CURRENT = NULL, W_STYLE = NULL, W_PAINT = NULL;
     RECT style = { 0 };
+    
+    // Zoom controls
+    HWND ZOOM_DEC = NULL;
+    HWND ZOOM_INC = NULL;
+    HWND ZOOM_LABEL = NULL;
 }
 
 // 此代码模块中包含的函数的前向声明:
@@ -228,12 +234,28 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    // Add initial tab
    TCITEM tie;
    tie.mask = TCIF_TEXT;
-   tie.pszText = (LPWSTR)L"Page 1";
+   tie.pszText = (LPWSTR)L"Page 1      "; // Added padding for close button
    TabCtrl_InsertItem(global::FILES, 0, &tie);
    SetFILES(home);
    ShowWindow(global::FILES, SW_SHOW);
+   
+   // Subclass FILES tab control
+   SetWindowSubclass(global::FILES, FilesTabSubclassProc, 0, 0);
 
-   global::CLOTH = CreateWindowEx(NULL, WC_TABCONTROL, L"", WS_VISIBLE | WS_CHILD | TCS_TABS, 0, home.bottom - 20, home.right, 20, hWnd, NULL, global::hInst, NULL);
+   // Change CLOTH to Tab Control for Paint switching
+   global::CLOTH = CreateWindowEx(NULL, WC_TABCONTROL, L"", WS_VISIBLE | WS_CHILD | TCS_TABS | TCS_BOTTOM, 0, home.bottom - 25, home.right, 25, hWnd, NULL, global::hInst, NULL);
+   
+   // Initialize CLOTH with default paint
+   if (global::CLOTH) {
+       TCITEM tie;
+       tie.mask = TCIF_TEXT;
+       tie.pszText = (LPWSTR)L"Default Paint      "; // Added padding
+       TabCtrl_InsertItem(global::CLOTH, 0, &tie);
+   }
+   SetCLOTH(home);
+   
+   // Subclass CLOTH tab control
+   SetWindowSubclass(global::CLOTH, ClothTabSubclassProc, 0, 0);
 
    return TRUE;
 }
@@ -258,6 +280,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         Setguide(home);
         SetFILES(home);
         SetCLOTH(home);
+        SetCanvas(home); // Added SetCanvas call
     }
     
     // Handle Find/Replace Message
@@ -274,12 +297,65 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (pnmh->hwndFrom == global::FILES && pnmh->code == TCN_SELCHANGE) {
                 int iPage = TabCtrl_GetCurSel(global::FILES);
                 MindMapManager::Instance().SwitchToPage(iPage);
+                
+                // Update CLOTH tabs for the new page
+                if (global::CLOTH) {
+                    TabCtrl_DeleteAllItems(global::CLOTH);
+                    int paintCount = MindMapManager::Instance().GetPaintCount();
+                    for (int i = 0; i < paintCount; ++i) {
+                        std::wstring title = MindMapManager::Instance().GetPaintTitle(i) + L"      "; // Added padding
+                        TCITEM tie;
+                        tie.mask = TCIF_TEXT;
+                        tie.pszText = (LPWSTR)title.c_str();
+                        TabCtrl_InsertItem(global::CLOTH, i, &tie);
+                    }
+                    // Select the active paint (default 0 for now, or store active index)
+                    // MindMapManager currently resets to activePaintIndex on SwitchToPage
+                    // We need to get the active index from manager if exposed, or assume 0/stored.
+                    // Let's assume SwitchToPage sets it up. We just need to reflect it in UI.
+                    // Since we don't have GetActivePaintIndex exposed yet, let's default to 0 or add it.
+                    TabCtrl_SetCurSel(global::CLOTH, 0); 
+                }
+                Canvas_Invalidate();
+            }
+            else if (pnmh->hwndFrom == global::CLOTH && pnmh->code == TCN_SELCHANGE) {
+                int iPaint = TabCtrl_GetCurSel(global::CLOTH);
+                MindMapManager::Instance().SwitchToPaint(iPaint);
+                Canvas_Invalidate();
             }
         }
         break;
     case WM_COMMAND:
         {
             int wmId = LOWORD(wParam);
+            int wmEvent = HIWORD(wParam); // Get notification code
+
+            // Handle Zoom Edit Control
+            if (wmId == IDM_ZOOM_EDIT && wmEvent == EN_KILLFOCUS) {
+                // When edit control loses focus, update zoom
+                WCHAR buf[16];
+                GetWindowText(global::ZOOM_LABEL, buf, 16);
+                std::wstring text = buf;
+                // Remove '%' if present
+                size_t percentPos = text.find(L'%');
+                if (percentPos != std::wstring::npos) {
+                    text = text.substr(0, percentPos);
+                }
+                try {
+                    int newZoom = std::stoi(text);
+                    Canvas_SetZoom(newZoom);
+                    Canvas_Invalidate();
+                    UpdateZoomLabel(); // Reformat text with %
+                } catch (...) {
+                    UpdateZoomLabel(); // Restore valid value on error
+                }
+                return 0;
+            } else if (wmId == IDM_ZOOM_EDIT && wmEvent == EN_SETFOCUS) {
+                 // Optional: Select all text when focused
+                 SendMessage(global::ZOOM_LABEL, EM_SETSEL, 0, -1);
+                 return 0;
+            }
+
             // 分析菜单选择:
             switch (wmId)
             {
@@ -294,6 +370,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				break;
 			case IDM_OPEN://打开
                 FileOpen(hWnd);
+                Canvas_Invalidate();
                 break;
 			case IDM_SAVE://保存
                 FileSave(hWnd);
@@ -306,9 +383,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 break;
 			case IDM_NEWFILE://新建文件
                 FileNew(hWnd);
+                Canvas_Invalidate();
                 break;
 			case IDM_NEWPAGE://新建页面
                 PageNew(hWnd);
+                Canvas_Invalidate();
                 break;
 			case IDM_CANCEL://撤销
 
@@ -329,7 +408,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			case IDM_DELETESUB://删除分支
                 EditDeleteSub(hWnd);
                 break;
-			case IDM_DELETE://删除该主题（分支接到父主题上）
+			case IDM_DELETE://删除该主题（分支接到父主题上）>
                 EditDelete(hWnd);
                 break;
 			case IDM_RETURN://回到中心主题
@@ -343,9 +422,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 break;
 			case IDM_NEWPAGEANDNEWFILE://在新页面中新建文件
                 PageNewFile(hWnd);
+                Canvas_Invalidate();
                 break;
 			case IDM_NEWPAGEANDFILE://在新页面中打开文件
                 PageOpenFile(hWnd);
+                Canvas_Invalidate();
                 break;
 			case IDM_SUB://下级主题
                 HandleSubtopic(hWnd);
@@ -388,9 +469,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 break;
 			case IDM_NEWPAINT://新建绘图
                 HandleNewPaint(hWnd);
+                Canvas_Invalidate();
                 break;
 			case IDM_NEWPAINTWITHTOPIC://新建与主题关联的绘图
                 HandleNewPaintWithTopic(hWnd);
+                Canvas_Invalidate();
                 break;
 			case IDM_LARGER://放大
                 HandleLarger(hWnd);
@@ -410,6 +493,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     ShowWindow(global::GUIDE, SW_NORMAL);
                     SetFILES(home);
                     SetCLOTH(home);
+                    SetCanvas(home); // Added SetCanvas call
                 }
                 Fguidetopic();
                 break;
@@ -419,6 +503,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     ShowWindow(global::GUIDE, SW_NORMAL);
                     SetFILES(home);
                     SetCLOTH(home);
+                    SetCanvas(home); // Added SetCanvas call
                 }
                 Fguidenote();
                 break;
@@ -428,6 +513,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     ShowWindow(global::GUIDE, SW_NORMAL);
                     SetFILES(home);
                     SetCLOTH(home);
+                    SetCanvas(home); // Added SetCanvas call
                 }
                 Fguidelabel();
                 break;
@@ -442,6 +528,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     UpdateWindow(global::STYLE);
                     SetFILES(home);
                     SetCLOTH(home);
+                    SetCanvas(home); // Added SetCanvas call
                 }
                 break;
 			case IDM_EDITPAINT://绘图面板
@@ -451,6 +538,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     UpdateWindow(global::STYLE);
                     SetFILES(home);
                     SetCLOTH(home);
+                    SetCanvas(home); // Added SetCanvas call
                 }
                 break;
 			case IDM_TOOLS://工具栏
@@ -458,8 +546,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 if(!IsWindowVisible(global::TOOLS)){
                     ShowWindow(global::TOOLS, SW_NORMAL);
                     SetFILES(home);
+                    SetCanvas(home); // Added SetCanvas call (though TOOLS visibility might not change layout size directly if it overlays, but SetFILES moves, so Canvas should move)
                 }
 				UpdateWindow(global::TOOLS);
+                break;
+            case IDM_ZOOM_DEC:
+                Canvas_ZoomBy(-10);
+                Canvas_Invalidate();
+                UpdateZoomLabel(); // Added call
+                break;
+            case IDM_ZOOM_INC:
+                Canvas_ZoomBy(10);
+                Canvas_Invalidate();
+                UpdateZoomLabel(); // Added call
                 break;
             default:
                 return DefWindowProc(hWnd, message, wParam, lParam);

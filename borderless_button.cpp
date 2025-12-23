@@ -179,33 +179,33 @@ static void DrawButton(HWND hwnd, HDC hdc)
     switch (pButton->state)
     {
     case BBS_HOVER:
-        bgColor = pButton->config.bgColorHover ? pButton->config.bgColorHover : DEFAULT_BG_HOVER;
-        borderColor = pButton->config.borderColorHover ? pButton->config.borderColorHover : DEFAULT_BORDER_HOVER;
+        bgColor = pButton->config.bgColorHover;
+        borderColor = pButton->config.borderColorHover;
         textColor = DEFAULT_TEXT_NORMAL;
         break;
 
     case BBS_PRESSED:
-        bgColor = pButton->config.bgColorPressed ? pButton->config.bgColorPressed : DEFAULT_BG_PRESSED;
-        borderColor = pButton->config.borderColorPressed ? pButton->config.borderColorPressed : DEFAULT_BORDER_PRESSED;
+        bgColor = pButton->config.bgColorPressed;
+        borderColor = pButton->config.borderColorPressed;
         textColor = DEFAULT_TEXT_NORMAL;
         break;
 
     case BBS_DISABLED:
-        bgColor = pButton->config.bgColorDisabled ? pButton->config.bgColorDisabled : DEFAULT_BG_DISABLED;
-        borderColor = pButton->config.borderColorNormal ? pButton->config.borderColorNormal : DEFAULT_BORDER_NORMAL;
+        bgColor = pButton->config.bgColorDisabled;
+        borderColor = pButton->config.borderColorNormal;
         textColor = DEFAULT_TEXT_DISABLED;
         break;
 
     case BBS_FOCUSED:
-        bgColor = pButton->config.bgColorHover ? pButton->config.bgColorHover : DEFAULT_BG_HOVER;
-        borderColor = RGB(0, 120, 215); // 焦点边框色
+        bgColor = pButton->config.bgColorHover;
+        borderColor = RGB(0, 120, 215); // ??
         textColor = DEFAULT_TEXT_NORMAL;
         break;
 
     case BBS_NORMAL:
     default:
-        bgColor = pButton->config.bgColorNormal ? pButton->config.bgColorNormal : DEFAULT_BG_NORMAL;
-        borderColor = pButton->config.borderColorNormal ? pButton->config.borderColorNormal : DEFAULT_BORDER_NORMAL;
+        bgColor = pButton->config.bgColorNormal;
+        borderColor = pButton->config.borderColorNormal;
         textColor = DEFAULT_TEXT_NORMAL;
         break;
     }
@@ -648,32 +648,24 @@ HWND CreateBorderlessButton(
         registered = TRUE;
     }
 
-    // 准备配置
-    BORDERLESS_BUTTON_CONFIG localConfig;
-    if (&config)
-    {
-        localConfig = config;
-    }
-    else
-    {
-        ZeroMemory(&config, sizeof(BORDERLESS_BUTTON_CONFIG));
-        localConfig.bgColorNormal = DEFAULT_BG_NORMAL;
-        localConfig.bgColorHover = DEFAULT_BG_HOVER;
-        localConfig.bgColorPressed = DEFAULT_BG_PRESSED;
-        localConfig.bgColorDisabled = DEFAULT_BG_DISABLED;
-        localConfig.borderColorNormal = DEFAULT_BORDER_NORMAL;
-        localConfig.iconSize = 24;
-        localConfig.iconTextSpacing = 4;
-        localConfig.iconAlignment = BB_ALIGN_LEFT;
-        localConfig.style = BB_STYLE_NORMAL;
-        localConfig.showText = TRUE;
-    }
+    // Apply defaults if 0
+    if (config.bgColorNormal == 0) config.bgColorNormal = DEFAULT_BG_NORMAL;
+    if (config.bgColorHover == 0) config.bgColorHover = DEFAULT_BG_HOVER;
+    if (config.bgColorPressed == 0) config.bgColorPressed = DEFAULT_BG_PRESSED;
+    if (config.bgColorDisabled == 0) config.bgColorDisabled = DEFAULT_BG_DISABLED;
+    
+    if (config.borderColorNormal == 0) config.borderColorNormal = DEFAULT_BORDER_NORMAL;
+    if (config.borderColorHover == 0) config.borderColorHover = DEFAULT_BORDER_HOVER;
+    if (config.borderColorPressed == 0) config.borderColorPressed = DEFAULT_BORDER_PRESSED;
+    
+    if (config.iconSize == 0) config.iconSize = 24;
+    if (config.iconTextSpacing == 0) config.iconTextSpacing = 4;
 
-    // 设置图标和文本
-    if (hIcon) localConfig.hIcon = hIcon;
-    if (text) wcsncpy_s(localConfig.text, text, 255);
+    // ??
+    if (hIcon) config.hIcon = hIcon;
+    if (text) wcsncpy_s(config.text, text, 255);
 
-    // 创建窗口
+    // 
     HWND hwnd = CreateWindowEx(
         0,
         g_szButtonClass,
@@ -683,7 +675,7 @@ HWND CreateBorderlessButton(
         hParent,
         (HMENU)(INT_PTR)id,
         hInstance,
-        &localConfig
+        &config
     );
 
     return hwnd;

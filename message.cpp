@@ -8,18 +8,514 @@
 #include "message.h"
 #include "resolve.h"
 #include "MindMapManager.h"
-#include "canvas_stub.h"
+#include "canvas_impl.h" // Changed from canvas_stub.h to canvas_impl.h
 #include "history_system.h"
 #include "borderless_button.h"
+#include "commands.h" // Ensure commands.h is included
+#include <functional> // Added for std::function
+#include <vector>
+#include <string>
+#include <set>
+#include <algorithm>
+#include <map>
+#include <windowsx.h> // For GET_X_LPARAM
+
+#pragma comment(lib, "comctl32.lib") // Link against comctl32.lib for subclassing functions
+
+// Global font list
+std::vector<std::wstring> g_sysFonts;
+std::vector<LPCWSTR> g_fontList;
+
+int CALLBACK EnumFontFamExProc(const LOGFONT* lpelfe, const TEXTMETRIC* lpntme, DWORD FontType, LPARAM lParam) {
+    std::set<std::wstring>* fonts = (std::set<std::wstring>*)lParam;
+    if (lpelfe->lfFaceName[0] != L'@') {
+        // Check if name contains non-ASCII characters (exclude English names)
+        bool hasNonAscii = false;
+        for (const wchar_t* p = lpelfe->lfFaceName; *p; ++p) {
+            if (*p > 127) {
+                hasNonAscii = true;
+                break;
+            }
+        }
+        if (hasNonAscii) {
+            fonts->insert(lpelfe->lfFaceName);
+        }
+    }
+    return 1;
+}
+
+void ReloadFontList() {
+    std::set<std::wstring> fonts;
+    HDC hdc = GetDC(NULL);
+    LOGFONT lf = { 0 };
+    lf.lfCharSet = DEFAULT_CHARSET;
+    EnumFontFamiliesEx(hdc, &lf, (FONTENUMPROC)EnumFontFamExProc, (LPARAM)&fonts, 0);
+    ReleaseDC(NULL, hdc);
+
+    g_sysFonts.assign(fonts.begin(), fonts.end());
+    
+    g_fontList.clear();
+    g_fontList.push_back(L"默认字体");
+    
+    if (!g_sysFonts.empty()) {
+        for (const auto& f : g_sysFonts) {
+            g_fontList.push_back(f.c_str());
+        }
+    }
+    
+    g_fontList.push_back(L"其他字体……");
+    g_fontList.push_back(NULL);
+}
+
+// Subclass procedure for panels (W_STYLE, W_PAINT) to forward messages to parent
+LRESULT CALLBACK PanelSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    switch (uMsg) {
+        case WM_COMMAND:
+        case WM_NOTIFY:
+        case WM_VSCROLL: 
+            // Forward these messages to the parent (StyleWndproc)
+            return SendMessage(GetParent(hWnd), uMsg, wParam, lParam);
+        case WM_DESTROY:
+            RemoveWindowSubclass(hWnd, PanelSubclassProc, uIdSubclass);
+            break;
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+// Files Tab Subclass
+std::map<int, HWND> g_tabCloseButtons;
+std::map<int, HWND> g_clothCloseButtons; // Added for CLOTH
+HWND g_tabEdit = NULL;
+WNDPROC g_oldTabEditProc = NULL;
+int g_editingTabIndex = -1;
+HWND g_editingTabCtrl = NULL; // Track which tab control is being edited
+
+void UpdateTabButtons(HWND hTab, std::map<int, HWND>& btnMap) {
+    int count = TabCtrl_GetItemCount(hTab);
+    
+    // Remove extra buttons
+    auto it = btnMap.begin();
+    while (it != btnMap.end()) {
+        if (it->first >= count) {
+            DestroyWindow(it->second);
+            it = btnMap.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (int i = 0; i < count; ++i) {
+        RECT rect;
+        TabCtrl_GetItemRect(hTab, i, &rect);
+        
+        int btnSize = 16;
+        int x = rect.right - btnSize - 4; 
+        int y = rect.top + (rect.bottom - rect.top - btnSize) / 2;
+        
+        HWND hBtn = NULL;
+        if (btnMap.find(i) == btnMap.end()) {
+            HICON hIconClose = (HICON)LoadImage(global::hInst, MAKEINTRESOURCE(IDI_close1616), IMAGE_ICON, 12, 12, LR_DEFAULTCOLOR);
+            if (!hIconClose) hIconClose = (HICON)LoadImage(global::hInst, L"icon/close.ico", IMAGE_ICON, 12, 12, LR_LOADFROMFILE);
+            
+            BORDERLESS_BUTTON_CONFIG config = {0};
+            config.iconSize = 10;
+            config.bgColorNormal = GetSysColor(COLOR_BTNFACE); 
+            config.cornerRadius = 0; 
+            
+            hBtn = CreateBorderlessButton(hTab, global::hInst, x, y, btnSize, btnSize, NULL, hIconClose, IDM_TAB_CLOSE, config);
+            btnMap[i] = hBtn;
+        } else {
+            hBtn = btnMap[i];
+            SetWindowPos(hBtn, HWND_TOP, x, y, btnSize, btnSize, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+    }
+}
+
+LRESULT CALLBACK TabEditProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
+        SetFocus(GetParent(hWnd)); 
+        return 0;
+    }
+    if (uMsg == WM_KILLFOCUS) {
+        WCHAR buf[256];
+        GetWindowText(hWnd, buf, 256);
+        if (g_editingTabIndex >= 0 && g_editingTabCtrl) {
+            std::wstring newTitle = buf;
+            
+            if (g_editingTabCtrl == global::FILES) {
+                MindMapManager::Instance().RenamePage(g_editingTabIndex, newTitle);
+                // Get updated title (RenamePage might have added extension)
+                newTitle = MindMapManager::Instance().GetPageTitle(g_editingTabIndex);
+            } else if (g_editingTabCtrl == global::CLOTH) {
+                MindMapManager::Instance().SetPaintTitle(g_editingTabIndex, newTitle);
+            }
+            
+            TCITEM tie;
+            tie.mask = TCIF_TEXT;
+            std::wstring displayTitle = newTitle + L"      "; 
+            tie.pszText = (LPWSTR)displayTitle.c_str();
+            TabCtrl_SetItem(g_editingTabCtrl, g_editingTabIndex, &tie);
+            
+            if (g_editingTabCtrl == global::FILES) UpdateTabButtons(g_editingTabCtrl, g_tabCloseButtons);
+            else UpdateTabButtons(g_editingTabCtrl, g_clothCloseButtons);
+        }
+        DestroyWindow(hWnd);
+        g_tabEdit = NULL;
+        g_editingTabIndex = -1;
+        g_editingTabCtrl = NULL;
+        return 0;
+    }
+    return CallWindowProc(g_oldTabEditProc, hWnd, uMsg, wParam, lParam);
+}
+
+LRESULT CALLBACK FilesTabSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    switch (uMsg) {
+        case WM_PAINT: {
+            LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            UpdateTabButtons(hWnd, g_tabCloseButtons);
+            return res;
+        }
+        case WM_SIZE:
+        case WM_WINDOWPOSCHANGED:
+            UpdateTabButtons(hWnd, g_tabCloseButtons);
+            break;
+            
+        case WM_COMMAND: {
+            if (LOWORD(wParam) == IDM_TAB_CLOSE) {
+                HWND hBtn = (HWND)lParam;
+                int tabIndex = -1;
+                for (auto& pair : g_tabCloseButtons) {
+                    if (pair.second == hBtn) {
+                        tabIndex = pair.first;
+                        break;
+                    }
+                }
+                
+                if (tabIndex != -1) {
+                    if (MessageBox(global::HOME, L"Are you sure you want to close this page?", L"Confirm Close", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                        MindMapManager::Instance().DeletePage(tabIndex);
+                        TabCtrl_DeleteItem(hWnd, tabIndex);
+                        
+                        // Rebuild buttons map to avoid index mismatch
+                        for (auto& pair : g_tabCloseButtons) DestroyWindow(pair.second);
+                        g_tabCloseButtons.clear();
+                        UpdateTabButtons(hWnd, g_tabCloseButtons);
+                        
+                        int cur = MindMapManager::Instance().GetCurrentPageIndex();
+                        TabCtrl_SetCurSel(hWnd, cur);
+                    }
+                }
+                return 0;
+            }
+            break;
+        }
+        
+        case WM_LBUTTONDBLCLK: {
+            TCHITTESTINFO hti;
+            hti.pt.x = GET_X_LPARAM(lParam);
+            hti.pt.y = GET_Y_LPARAM(lParam);
+            int index = TabCtrl_HitTest(hWnd, &hti);
+            if (index != -1) {
+                RECT rect;
+                TabCtrl_GetItemRect(hWnd, index, &rect);
+                rect.right -= 20;
+                
+                g_editingTabIndex = index;
+                g_editingTabCtrl = hWnd;
+                std::wstring currentTitle = MindMapManager::Instance().GetPageTitle(index);
+                
+                g_tabEdit = CreateWindow(L"EDIT", currentTitle.c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 
+                    rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, hWnd, NULL, global::hInst, NULL);
+                SendMessage(g_tabEdit, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+                SetFocus(g_tabEdit);
+                SendMessage(g_tabEdit, EM_SETSEL, 0, -1);
+                
+                g_oldTabEditProc = (WNDPROC)SetWindowLongPtr(g_tabEdit, GWLP_WNDPROC, (LONG_PTR)TabEditProc);
+            }
+            return 0;
+        }
+        
+        case WM_DESTROY:
+            RemoveWindowSubclass(hWnd, FilesTabSubclassProc, uIdSubclass);
+            break;
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+LRESULT CALLBACK ClothTabSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    switch (uMsg) {
+        case WM_PAINT: {
+            LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            UpdateTabButtons(hWnd, g_clothCloseButtons);
+            return res;
+        }
+        case WM_SIZE:
+        case WM_WINDOWPOSCHANGED:
+            UpdateTabButtons(hWnd, g_clothCloseButtons);
+            break;
+            
+        case WM_COMMAND: {
+            if (LOWORD(wParam) == IDM_TAB_CLOSE) {
+                HWND hBtn = (HWND)lParam;
+                int tabIndex = -1;
+                for (auto& pair : g_clothCloseButtons) {
+                    if (pair.second == hBtn) {
+                        tabIndex = pair.first;
+                        break;
+                    }
+                }
+                
+                if (tabIndex != -1) {
+                    if (MessageBox(global::HOME, L"Are you sure you want to close this paint?", L"Confirm Close", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                        MindMapManager::Instance().DeletePaint(tabIndex);
+                        TabCtrl_DeleteItem(hWnd, tabIndex);
+                        
+                        // Rebuild buttons map
+                        for (auto& pair : g_clothCloseButtons) DestroyWindow(pair.second);
+                        g_clothCloseButtons.clear();
+                        UpdateTabButtons(hWnd, g_clothCloseButtons);
+                        
+                        // Current selection is handled by DeletePaint calling SwitchToPaint, but we need to update UI selection
+                        // Actually DeletePaint calls SwitchToPaint which updates UI, but TabCtrl_DeleteItem might shift indices.
+                        // We should re-sync selection.
+                        // MindMapManager::DeletePaint updates activePaintIndex.
+                        // But we need to get it.
+                        // Let's just assume the manager handles the logic and we just need to reflect it.
+                        // Wait, DeletePaint calls SwitchToPaint which calls TabCtrl_SetCurSel.
+                        // So we might be fine.
+                    }
+                }
+                return 0;
+            }
+            break;
+        }
+        
+        case WM_LBUTTONDBLCLK: {
+            TCHITTESTINFO hti;
+            hti.pt.x = GET_X_LPARAM(lParam);
+            hti.pt.y = GET_Y_LPARAM(lParam);
+            int index = TabCtrl_HitTest(hWnd, &hti);
+            if (index != -1) {
+                RECT rect;
+                TabCtrl_GetItemRect(hWnd, index, &rect);
+                rect.right -= 20;
+                
+                g_editingTabIndex = index;
+                g_editingTabCtrl = hWnd;
+                std::wstring currentTitle = MindMapManager::Instance().GetPaintTitle(index);
+                
+                g_tabEdit = CreateWindow(L"EDIT", currentTitle.c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 
+                    rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, hWnd, NULL, global::hInst, NULL);
+                SendMessage(g_tabEdit, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+                SetFocus(g_tabEdit);
+                SendMessage(g_tabEdit, EM_SETSEL, 0, -1);
+                
+                g_oldTabEditProc = (WNDPROC)SetWindowLongPtr(g_tabEdit, GWLP_WNDPROC, (LONG_PTR)TabEditProc);
+            }
+            return 0;
+        }
+        
+        case WM_DESTROY:
+            RemoveWindowSubclass(hWnd, ClothTabSubclassProc, uIdSubclass);
+            break;
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+// Helper to apply style to selected nodes
+static void ApplyStyleToSelectedNodes(std::function<void(MindNode*)> applyFunc) {
+    auto& manager = MindMapManager::Instance();
+    const auto& selected = manager.GetSelectedNodes();
+    bool applied = false;
+    MindNode* lastNode = nullptr; // Track last modified node for UI update
+
+    if (!selected.empty()) {
+        for (MindNode* node : selected) {
+            applyFunc(node);
+            Canvas_CalculateNodeSize(node);
+            lastNode = node;
+        }
+        applied = true;
+    } else if (global::G_TREEVIEW) {
+        HTREEITEM hSel = TreeView_GetSelection(global::G_TREEVIEW);
+        if (hSel) {
+            MindNode* node = manager.GetNodeFromHandle(hSel);
+            if (node) {
+                applyFunc(node);
+                Canvas_CalculateNodeSize(node);
+                lastNode = node;
+                applied = true;
+            }
+        }
+    }
+    if (applied) {
+        Canvas_Invalidate();
+        if (lastNode) {
+            UpdateStylePanelUI(lastNode); // Update UI to reflect changes (e.g. button colors)
+        }
+    }
+}
+
+// Helper to pick color
+static std::wstring PickColor(HWND owner) {
+    CHOOSECOLOR cc = {0};
+    static COLORREF customColors[16] = {0};
+    cc.lStructSize = sizeof(cc);
+    cc.hwndOwner = owner;
+    cc.lpCustColors = customColors;
+    cc.Flags = CC_FULLOPEN | CC_RGBINIT;
+    if (ChooseColor(&cc)) {
+        wchar_t buf[16];
+        swprintf_s(buf, L"#%02X%02X%02X", GetRValue(cc.rgbResult), GetGValue(cc.rgbResult), GetBValue(cc.rgbResult));
+        return buf;
+    }
+    return L"";
+}
+
+// Helper to get color from index
+static std::wstring GetColorFromIndex(int idx, HWND owner) {
+    switch(idx) {
+        case 0: return L"#000000";
+        case 1: return L"#FFFFFF";
+        case 2: return L"#D3D3D3";
+        case 3: return L"#FF0000";
+        case 4: return L"#FFFF00";
+        case 5: return PickColor(owner);
+        default: return L"";
+    }
+}
+
+// Reverse helpers for UI update
+static int GetShapeIndex(const std::wstring& shape) {
+    if (shape == L"rounded_rectangle") return 0;
+    if (shape == L"rectangle") return 1;
+    if (shape == L"ellipse") return 2;
+    if (shape == L"circle") return 3;
+    return -1;
+}
+
+static int GetColorIndex(const std::wstring& color) {
+    if (color == L"#000000") return 0;
+    if (color == L"#FFFFFF") return 1;
+    if (color == L"#D3D3D3") return 2;
+    if (color == L"#FF0000") return 3;
+    if (color == L"#FFFF00") return 4;
+    return 5; // Custom
+}
+
+static int GetFrameStyleIndex(const std::wstring& style) {
+    if (style == L"solid") return 0;
+    if (style == L"dashed") return 1;
+    if (style == L"dotted") return 2;
+    return -1;
+}
+
+static int GetAlignIndex(const std::wstring& align) {
+    if (align == L"left") return 0;
+    if (align == L"center") return 1;
+    if (align == L"right") return 2;
+    return -1;
+}
+
+static int GetStructureIndex(const std::wstring& struc) {
+    if (struc == L"mindmap") return 0;
+    if (struc == L"tree") return 1;
+    if (struc == L"bracket") return 2;
+    if (struc == L"fishbone") return 3;
+    return -1;
+}
+
+void UpdateStylePanelUI(MindNode* node) {
+    if (!node || !global::W_STYLE) return;
+
+    // Shape
+    int shapeIdx = GetShapeIndex(node->style.shape);
+    if (shapeIdx != -1) SendDlgItemMessage(global::W_STYLE, IDM_SHAPE, CB_SETCURSEL, shapeIdx, 0);
+
+    // Fill Color
+    int fillIdx = GetColorIndex(node->style.fillColor);
+    SendDlgItemMessage(global::W_STYLE, IDM_FILL, CB_SETCURSEL, fillIdx, 0);
+
+    // Frame Style
+    int frameIdx = GetFrameStyleIndex(node->style.borderStyle);
+    if (frameIdx != -1) SendDlgItemMessage(global::W_STYLE, IDM_FRAME, CB_SETCURSEL, frameIdx, 0);
+
+    // Frame Width
+    if (GetDlgItemInt(global::W_STYLE, IDM_FRAMETHICK, NULL, FALSE) != node->style.borderWidth) {
+        SetDlgItemInt(global::W_STYLE, IDM_FRAMETHICK, node->style.borderWidth, FALSE);
+    }
+
+    // Frame Color
+    int frameColorIdx = GetColorIndex(node->style.borderColor);
+    SendDlgItemMessage(global::W_STYLE, IDM_FRAMECOLOR, CB_SETCURSEL, frameColorIdx, 0);
+
+    // Font Family
+    int fontIdx = CB_ERR;
+    if (node->style.fontFamily == L"Arial" || node->style.fontFamily.empty()) {
+        fontIdx = 0;
+    } else {
+        fontIdx = SendDlgItemMessage(global::W_STYLE, IDM_FONT, CB_FINDSTRINGEXACT, -1, (LPARAM)node->style.fontFamily.c_str());
+    }
+
+    if (fontIdx != CB_ERR) {
+        SendDlgItemMessage(global::W_STYLE, IDM_FONT, CB_SETCURSEL, fontIdx, 0);
+    } else {
+        SendDlgItemMessage(global::W_STYLE, IDM_FONT, CB_SETCURSEL, 0, 0);
+    }
+
+    // Font Size
+    if (GetDlgItemInt(global::W_STYLE, IDM_TEXTSIZE, NULL, FALSE) != node->style.fontSize) {
+        SetDlgItemInt(global::W_STYLE, IDM_TEXTSIZE, node->style.fontSize, FALSE);
+    }
+
+    // Text Color
+    int textColorIdx = GetColorIndex(node->style.textColor);
+    SendDlgItemMessage(global::W_STYLE, IDM_TEXTCOLOR, CB_SETCURSEL, textColorIdx, 0);
+
+    // Update Bold/Italic/Underline buttons state (visual style)
+    HWND hBold = GetDlgItem(global::W_STYLE, IDM_BOLD);
+    HWND hItalic = GetDlgItem(global::W_STYLE, IDM_ITALIC);
+    HWND hUnderline = GetDlgItem(global::W_STYLE, IDM_UNDERLINE);
+
+    COLORREF activeBg = RGB(180, 180, 180); // Darker for active
+    COLORREF normalBg = RGB(240, 240, 240); // Default
+    COLORREF borderCol = RGB(200, 200, 200);
+
+    if (hBold) {
+        BorderlessButtonSetColors(hBold, node->style.bold ? activeBg : normalBg, borderCol, BBS_NORMAL);
+    }
+    if (hItalic) {
+        BorderlessButtonSetColors(hItalic, node->style.italic ? activeBg : normalBg, borderCol, BBS_NORMAL);
+    }
+    if (hUnderline) {
+        BorderlessButtonSetColors(hUnderline, node->style.underline ? activeBg : normalBg, borderCol, BBS_NORMAL);
+    }
+
+    // Text Align
+    int alignIdx = GetAlignIndex(node->style.textAlignment);
+    if (alignIdx != -1) SendDlgItemMessage(global::W_STYLE, IDM_TEXTALIGN, CB_SETCURSEL, alignIdx, 0);
+
+    // Branch Width
+    if (GetDlgItemInt(global::W_STYLE, IDM_BRANCH_THICK, NULL, FALSE) != node->style.branchWidth) {
+        SetDlgItemInt(global::W_STYLE, IDM_BRANCH_THICK, node->style.branchWidth, FALSE);
+    }
+
+    // Branch Color
+    int branchColorIdx = GetColorIndex(node->style.branchColor);
+    SendDlgItemMessage(global::W_STYLE, IDM_BRANCH_COLOR, CB_SETCURSEL, branchColorIdx, 0);
+
+    // Structure
+    int strucIdx = GetStructureIndex(node->style.nodeStructure);
+    if (strucIdx != -1) SendDlgItemMessage(global::W_STYLE, IDM_STRUCTURE, CB_SETCURSEL, strucIdx, 0);
+}
 
 // 各控件选项文本
-LPCWSTR shapestr[] = { L"圆角矩形",L"矩形",L"椭圆",L"圆形",L"菱形",L"自定义" ,NULL };
-LPCWSTR framestr[] = { L"实线",L"双实线",L"虚线",L"点划线",L"点双划线" ,NULL };
+LPCWSTR shapestr[] = { L"圆角矩形",L"矩形",L"椭圆",L"圆形", NULL };
+LPCWSTR framestr[] = { L"实线",L"长虚线",L"短虚线",NULL };
 LPCWSTR colorstr[] = { L"黑色",L"白色",L"浅灰",L"红色",L"黄色",L"自定义" ,NULL };
 LPCWSTR alignstr[] = { L"左对齐",L"居中对齐",L"右对齐" ,NULL };
 LPCWSTR structureStr[] = { L"思维导图", L"树状图", L"括号图", L"鱼骨图", NULL };
-LPCWSTR presetStr[] = { L"未确定", NULL };
-LPCWSTR font[] = { L"跟随系统",L"其他字体……",NULL };
+LPCWSTR presetStr[] = { L"思维导图", L"树状图", L"括号图", L"鱼骨图",NULL };
 
 // 计算字符串数组长度
 int lengthof(LPCWSTR* str) {
@@ -100,6 +596,7 @@ LRESULT CALLBACK ToolsWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
             Setguide(home);
             Setstyle(home);
             SetFILES(home);
+            SetCanvas(home); // Added SetCanvas call
             return 0;
         case IDM_OPENTOOLS:
             Ftools(home);
@@ -113,6 +610,7 @@ LRESULT CALLBACK ToolsWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
             Setguide(home);
             Setstyle(home);
             SetFILES(home);
+            SetCanvas(home); // Added SetCanvas call
             return 0;
         case IDM_SUB:
         {
@@ -261,6 +759,15 @@ LRESULT CALLBACK GuideWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
             else if (pnmh->code == TVN_SELCHANGEDW || pnmh->code == TVN_SELCHANGEDA) {
                 // 选中项改变时，刷新画布以同步高亮
                 Canvas_Invalidate();
+                
+                // Update Style Panel
+                HTREEITEM hSel = TreeView_GetSelection(global::G_TREEVIEW);
+                if (hSel) {
+                    MindNode* node = MindMapManager::Instance().GetNodeFromHandle(hSel);
+                    if (node) {
+                        UpdateStylePanelUI(node);
+                    }
+                }
             }
         }
         NMHDR* nmhdr = (NMHDR*)lParam;
@@ -271,15 +778,15 @@ LRESULT CALLBACK GuideWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
             int selected = TabCtrl_GetCurSel(global::G_TAB);
 
             switch (selected) {
-            case 0:
-                SendMessageW(hWnd, WM_COMMAND, IDM_GUIDETOPIC, 0);
-                break;
-            case 1:
-                SendMessageW(hWnd, WM_COMMAND, IDM_GUIDENOTE, 0);
-                break;
-            case 2:
-                SendMessageW(hWnd, WM_COMMAND, IDM_GUIDELABEL, 0);
-                break;
+                case 0:
+                    SendMessageW(hWnd, WM_COMMAND, IDM_GUIDETOPIC, 0);
+                    break;
+                case 1:
+                    SendMessageW(hWnd, WM_COMMAND, IDM_GUIDENOTE, 0);
+                    break;
+                case 2:
+                    SendMessageW(hWnd, WM_COMMAND, IDM_GUIDELABEL, 0);
+                    break;
             }
         }
         break;
@@ -302,6 +809,7 @@ LRESULT CALLBACK GuideWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
             ShowWindow(hWnd, SW_HIDE);
             SetFILES(home);
             SetCLOTH(home);
+            SetCanvas(home); // Added SetCanvas call
             return 0;
         }
         break;
@@ -342,6 +850,9 @@ LRESULT CALLBACK StyleWndproc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
             WS_VISIBLE | WS_CHILD | WS_VSCROLL,
             20, 20, 200, global::style.bottom,
             hWnd, NULL, global::hInst, NULL);
+        
+        // Subclass W_STYLE to forward messages
+        SetWindowSubclass(global::W_STYLE, PanelSubclassProc, 0, 0);
 
         // 样式设置部分 - 按顺序创建各控件
         yPos = 10;
@@ -375,7 +886,11 @@ LRESULT CALLBACK StyleWndproc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
 
         // 文字设置
         CreateText(global::W_STYLE, global::hInst, -1, 10, yPos, 60, 20, L"字体:");
-        CreateDropList(global::W_STYLE, global::hInst, IDM_FONT, 80, yPos, 100, 200, font, lengthof(font));
+        
+        // Initialize font list if empty
+        if (g_fontList.empty()) ReloadFontList();
+        
+        CreateDropList(global::W_STYLE, global::hInst, IDM_FONT, 80, yPos, 100, 200, g_fontList.data(), (int)g_fontList.size() - 1);
         yPos += 30;
 
         CreateText(global::W_STYLE, global::hInst, -1, 10, yPos, 80, 20, L"字体大小:");
@@ -387,9 +902,26 @@ LRESULT CALLBACK StyleWndproc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         yPos += 30;
 
         // 文字样式按钮
-        CreateButton(global::W_STYLE, global::hInst, IDM_BOLD, 20, yPos, 40, 25, L"粗体");
-        CreateButton(global::W_STYLE, global::hInst, IDM_ITALIC, 60, yPos, 40, 25, L"斜体");
-        CreateButton(global::W_STYLE, global::hInst, IDM_UNDERLINE, 100, yPos, 60, 25, L"下划线");
+        // CreateButton(global::W_STYLE, global::hInst, IDM_BOLD, 20, yPos, 40, 25, L"粗体");
+        // CreateButton(global::W_STYLE, global::hInst, IDM_ITALIC, 60, yPos, 40, 25, L"斜体");
+        // CreateButton(global::W_STYLE, global::hInst, IDM_UNDERLINE, 100, yPos, 60, 25, L"下划线");
+        
+        BORDERLESS_BUTTON_CONFIG btnConfig = {0};
+        btnConfig.borderWidth = 1;
+        btnConfig.cornerRadius = 0;
+        btnConfig.style = BB_STYLE_NORMAL;
+        btnConfig.showText = TRUE;
+        btnConfig.bgColorNormal = RGB(240, 240, 240);
+        btnConfig.borderColorNormal = RGB(200, 200, 200);
+        btnConfig.bgColorHover = RGB(229, 241, 251);
+        btnConfig.borderColorHover = RGB(0, 120, 215);
+        btnConfig.bgColorPressed = RGB(204, 228, 247);
+        btnConfig.borderColorPressed = RGB(0, 84, 153);
+        
+        CreateBorderlessButton(global::W_STYLE, global::hInst, 20, yPos, 40, 25, L"粗体", NULL, IDM_BOLD, btnConfig);
+        CreateBorderlessButton(global::W_STYLE, global::hInst, 60, yPos, 40, 25, L"斜体", NULL, IDM_ITALIC, btnConfig);
+        CreateBorderlessButton(global::W_STYLE, global::hInst, 100, yPos, 60, 25, L"下划线", NULL, IDM_UNDERLINE, btnConfig);
+        
         yPos += 30;
 
         // 文字对齐方式
@@ -433,6 +965,9 @@ LRESULT CALLBACK StyleWndproc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
             20, 20, 200, global::style.bottom,
             hWnd, NULL, global::hInst, NULL);
         ShowWindow(global::W_PAINT, SW_HIDE);
+        
+        // Subclass W_PAINT to forward messages
+        SetWindowSubclass(global::W_PAINT, PanelSubclassProc, 1, 0);
 
         // 绘图设置部分
         yPos = 10;
@@ -512,6 +1047,7 @@ LRESULT CALLBACK StyleWndproc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
             GetClientRect(global::HOME, &home);
             SetFILES(home);
             SetCLOTH(home);
+            SetCanvas(home); // Added SetCanvas call
             return 0;
 
         case IDM_EDITSTYLE:
@@ -530,83 +1066,190 @@ LRESULT CALLBACK StyleWndproc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
 
             // ========== 样式面板控件命令处理 ==========
         case IDM_SHAPE:
-            // 处理形状选择
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR) {
+                    std::wstring shape;
+                    switch(idx) {
+                        case 0: shape = L"rounded_rectangle"; break;
+                        case 1: shape = L"rectangle"; break;
+                        case 2: shape = L"ellipse"; break;
+                        case 3: shape = L"circle"; break;
+                    }
+                    if (!shape.empty()) {
+                        ApplyStyleToSelectedNodes([shape](MindNode* n){ n->style.shape = shape; });
+                    }
+                }
+            }
             return 0;
 
         case IDM_FILL:
-            // 处理填充颜色选择
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR) {
+                    std::wstring color = GetColorFromIndex(idx, hWnd);
+                    if (!color.empty()) {
+                        ApplyStyleToSelectedNodes([color](MindNode* n){ n->style.fillColor = color; });
+                    }
+                }
+            }
             return 0;
 
         case IDM_FRAME:
-            // 处理边框样式选择
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR) {
+                    std::wstring style;
+                    switch(idx) {
+                        case 0: style = L"solid"; break;
+                        case 1: style = L"dashed"; break;
+                        case 2: style = L"dotted"; break;
+                    }
+                    if (!style.empty()) {
+                        ApplyStyleToSelectedNodes([style](MindNode* n){ n->style.borderStyle = style; });
+                    }
+                }
+            }
             return 0;
 
         case IDM_FRAMETHICK:
-            // 处理边框粗细设置
+            if (HIWORD(wParam) == EN_CHANGE) {
+                WCHAR buf[16];
+                GetWindowText((HWND)lParam, buf, 16);
+                try {
+                    int val = std::stoi(buf);
+                    if (val >= 0) {
+                        ApplyStyleToSelectedNodes([val](MindNode* n){ n->style.borderWidth = val; });
+                    }
+                } catch(...) {}
+            }
             return 0;
 
         case IDM_FRAMECOLOR:
-            // 处理边框颜色选择
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR) {
+                    std::wstring color = GetColorFromIndex(idx, hWnd);
+                    if (!color.empty()) {
+                        ApplyStyleToSelectedNodes([color](MindNode* n){ n->style.borderColor = color; });
+                    }
+                }
+            }
             return 0;
 
         case IDM_FONT:
-            // 处理字体选择
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR) {
+                    int count = SendMessage((HWND)lParam, CB_GETCOUNT, 0, 0);
+                    if (idx == count - 1) { // "其他字体……"
+                         ReloadFontList();
+                         SendMessage((HWND)lParam, CB_RESETCONTENT, 0, 0);
+                         for (size_t i = 0; i < g_fontList.size() - 1; ++i) {
+                             SendMessage((HWND)lParam, CB_ADDSTRING, 0, (LPARAM)g_fontList[i]);
+                         }
+                         SendMessage((HWND)lParam, CB_SETCURSEL, 0, 0); // Reset selection
+                    } else if (idx == 0) {
+                        ApplyStyleToSelectedNodes([](MindNode* n){ n->style.fontFamily = L"Arial"; });
+                    } else {
+                        WCHAR buf[64];
+                        SendMessage((HWND)lParam, CB_GETLBTEXT, idx, (LPARAM)buf);
+                        ApplyStyleToSelectedNodes([buf](MindNode* n){ n->style.fontFamily = buf; });
+                    }
+                }
+            }
             return 0;
 
         case IDM_TEXTSIZE:
-            // 处理字体大小设置
+            if (HIWORD(wParam) == EN_CHANGE) {
+                WCHAR buf[16];
+                GetWindowText((HWND)lParam, buf, 16);
+                try {
+                    int val = std::stoi(buf);
+                    if (val > 0) {
+                        ApplyStyleToSelectedNodes([val](MindNode* n){ n->style.fontSize = val; });
+                    }
+                } catch(...) {}
+            }
             return 0;
 
         case IDM_TEXTCOLOR:
-            // 处理文字颜色选择
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR) {
+                    std::wstring color = GetColorFromIndex(idx, hWnd);
+                    if (!color.empty()) {
+                        ApplyStyleToSelectedNodes([color](MindNode* n){ n->style.textColor = color; });
+                    }
+                }
+            }
             return 0;
 
         case IDM_BOLD:
-            // 处理粗体切换
+            ApplyStyleToSelectedNodes([](MindNode* n){ n->style.bold = !n->style.bold; });
             return 0;
 
         case IDM_ITALIC:
-            // 处理斜体切换
+            ApplyStyleToSelectedNodes([](MindNode* n){ n->style.italic = !n->style.italic; });
             return 0;
 
         case IDM_UNDERLINE:
-            // 处理下划线切换
+            ApplyStyleToSelectedNodes([](MindNode* n){ n->style.underline = !n->style.underline; });
             return 0;
 
         case IDM_TEXTALIGN:
-            // 处理文字对齐方式选择
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR) {
+                    std::wstring align;
+                    switch(idx) {
+                        case 0: align = L"left"; break;
+                        case 1: align = L"center"; break;
+                        case 2: align = L"right"; break;
+                    }
+                    ApplyStyleToSelectedNodes([align](MindNode* n){ n->style.textAlignment = align; });
+                }
+            }
             return 0;
 
-        case IDM_BRANCH_THICK:
-            // 处理分支线粗细设置
-            return 0;
-
-        case IDM_BRANCH_COLOR:
-            // 处理分支线颜色选择
-            return 0;
-
-        case IDM_STRUCTURE:
-            // 处理结构选择
-            return 0;
-
-            // ========== 绘图面板控件命令处理 ==========
+            // ========== 绘图设置面板控件命令处理 ==========
         case IDM_PRESET:
-            // 处理预设样式选择
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR) {
+                    // TODO: Apply preset styles
+                }
+            }
             return 0;
 
         case IDM_AUTO_BALANCE:
-            // 处理自动平衡布局切换
-            return 0;
-
         case IDM_COMPACT_LAYOUT:
-            // 处理紧凑布局切换
-            return 0;
-
         case IDM_SIBLING_ALIGN:
-            // 处理同级节点对齐切换
+            // 仅更新自定义按钮状态
+            {
+                HWND hWndButton = (HWND)lParam;
+                bool checked = (SendMessage(hWndButton, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                COLORREF bgColor = checked ? RGB(180, 180, 180) : RGB(240, 240, 240);
+                COLORREF borderColor = RGB(200, 200, 200);
+                if (checked) {
+                    // If checked, apply the style immediately
+                    /*
+                    ApplyStyleToSelectedNodes([&](MindNode* n) {
+                        n->layout.autoBalance = (LOWORD(wParam) == IDM_AUTO_BALANCE) ? true : n->layout.autoBalance;
+                        n->layout.compact = (LOWORD(wParam) == IDM_COMPACT_LAYOUT) ? true : n->layout.compact;
+                        n->layout.siblingAlign = (LOWORD(wParam) == IDM_SIBLING_ALIGN) ? true : n->layout.siblingAlign;
+                    });
+                    */
+                }
+                // Update button appearance
+                SendMessage(hWndButton, BM_SETSTATE, checked ? BST_UNCHECKED : BST_CHECKED, 0);
+                InvalidateRect(hWndButton, NULL, TRUE);
+            }
             return 0;
         }
         break;
+    
+
     case WM_MOUSEWHEEL:
         // 处理鼠标滚轮滚动
     {
@@ -639,10 +1282,5 @@ LRESULT CALLBACK StyleWndproc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         }
     }
     }
-
     return DefWindowProc(hWnd, message, wParam, lParam);
-}
-
-void S_CLOSEcliked() {
-
 }

@@ -36,4 +36,9 @@ namespace global {
 	extern RECT guide;//����������
 	extern HWND S_TAB, S_CLOSE, S_CURRENT, W_STYLE, W_PAINT;//�༭���ؼ�
 	extern RECT style;//�༭������
+
+    // Zoom controls
+    extern HWND ZOOM_DEC;
+    extern HWND ZOOM_INC;
+    extern HWND ZOOM_LABEL;
 }

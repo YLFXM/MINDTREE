@@ -12,7 +12,7 @@ void PageNew(HWND hWnd) {
     // Add Tab to UI
     if (global::FILES) {
         int count = MindMapManager::Instance().GetPageCount();
-        std::wstring title = L"Page " + std::to_wstring(count);
+        std::wstring title = L"Page " + std::to_wstring(count) + L"      "; // Added padding
         
         TCITEM tie;
         tie.mask = TCIF_TEXT;
@@ -35,7 +35,7 @@ void PageOpenFile(HWND hWnd) {
     // Update Tab Title
     if (global::FILES) {
         int cur = TabCtrl_GetCurSel(global::FILES);
-        std::wstring title = MindMapManager::Instance().GetPageTitle(cur);
+        std::wstring title = MindMapManager::Instance().GetPageTitle(cur) + L"      "; // Added padding
         
         TCITEM tie;
         tie.mask = TCIF_TEXT;

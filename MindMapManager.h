@@ -102,6 +102,7 @@ public:
         nextId = 1;
         
         root = new MindNode(nextId++, rootText);
+        root->style.nodeStructure = L"mindmap"; // Set root structure to mindmap
         nodeMap[root->hTreeItem] = root; // Note: hTreeItem is null here, need to set after UI creation
     }
 
@@ -129,6 +130,14 @@ public:
         MindNode* parentNode = GetNodeFromHandle(hSelected);
         if (parentNode) {
             MindNode* newNode = new MindNode(nextId++, text, parentNode);
+            
+            // Inherit structure if parent is default
+            if (parentNode->style.nodeStructure == L"default" && parentNode->parent) {
+                newNode->style.nodeStructure = parentNode->parent->style.nodeStructure;
+            } else if (parentNode->style.nodeStructure != L"default") {
+                newNode->style.nodeStructure = parentNode->style.nodeStructure;
+            }
+            
             parentNode->children.push_back(newNode);
 
             // Update UI
@@ -143,6 +152,11 @@ public:
             nodeMap[newNode->hTreeItem] = newNode;
             
             TreeView_Expand(global::G_TREEVIEW, hSelected, TVE_EXPAND);
+            
+            // Deselect previous and select new
+            ClearSelection();
+            AddToSelection(newNode);
+            
             TreeView_SelectItem(global::G_TREEVIEW, newNode->hTreeItem);
             SetFocus(global::G_TREEVIEW);
         }
@@ -174,6 +188,10 @@ public:
 
             newNode->hTreeItem = TreeView_InsertItem(global::G_TREEVIEW, &tvis);
             nodeMap[newNode->hTreeItem] = newNode;
+
+            // Deselect previous and select new
+            ClearSelection();
+            AddToSelection(newNode);
 
             TreeView_SelectItem(global::G_TREEVIEW, newNode->hTreeItem);
             SetFocus(global::G_TREEVIEW);
@@ -228,6 +246,10 @@ public:
 
         // Select the newly inserted parent node
         if (newNode->hTreeItem) {
+            // Deselect previous and select new
+            ClearSelection();
+            AddToSelection(newNode);
+            
             TreeView_SelectItem(global::G_TREEVIEW, newNode->hTreeItem);
         }
     }
@@ -923,13 +945,14 @@ public:
                 curPage.paints.clear();
                 curPage.paints.push_back(p);
                 curPage.activePaintIndex = 0;
-            } else {
+            }
+            else {
                 curPage.paints[active].root = root;
                 curPage.paints[active].freeNodes = freeNodes;
                 curPage.paints[active].nextId = nextId;
             }
         }
-        
+
         PageInfo page;
         page.activePaintIndex = 0;
 
@@ -944,13 +967,13 @@ public:
         page.title = L"Page " + std::to_wstring(pages.size() + 1);
         page.filePath = L"";
         pages.push_back(page);
-        
+
         SwitchToPage(pages.size() - 1);
     }
 
     void SwitchToPage(int index) {
         if (index < 0 || index >= pages.size()) return;
-        
+
         // Sync current before switching (store current root/freeNodes into active paint)
         if (currentPageIndex >= 0 && currentPageIndex < pages.size()) {
             PageInfo& curPage = pages[currentPageIndex];
@@ -965,13 +988,14 @@ public:
                 curPage.paints.clear();
                 curPage.paints.push_back(p);
                 curPage.activePaintIndex = 0;
-            } else {
+            }
+            else {
                 curPage.paints[active].root = root;
                 curPage.paints[active].freeNodes = freeNodes;
                 curPage.paints[active].nextId = nextId;
             }
         }
-        
+
         currentPageIndex = index;
 
         // Ensure the target page has at least one paint; if not, create a default paint
@@ -990,11 +1014,133 @@ public:
             target.activePaintIndex = 0;
         }
 
+        // Update CLOTH tabs
+        if (global::CLOTH) {
+            TabCtrl_DeleteAllItems(global::CLOTH);
+            for (size_t i = 0; i < target.paints.size(); ++i) {
+                TCITEM tie;
+                tie.mask = TCIF_TEXT;
+                std::wstring title = target.paints[i].title + L"      "; // Added padding
+                tie.pszText = (LPWSTR)title.c_str();
+                TabCtrl_InsertItem(global::CLOTH, i, &tie);
+            }
+            TabCtrl_SetCurSel(global::CLOTH, target.activePaintIndex);
+        }
+
         PaintInfo& activePaint = target.paints[target.activePaintIndex];
         root = activePaint.root;
         freeNodes = activePaint.freeNodes;
         nextId = activePaint.nextId;
+
+        // Update UI
+        if (global::G_TREEVIEW) {
+            TreeView_DeleteAllItems(global::G_TREEVIEW);
+            nodeMap.clear();
+            if (root) {
+                RecursivelyCreateNodeUI(root, TVI_ROOT);
+            }
+            for (auto fn : freeNodes) {
+                RecursivelyCreateNodeUI(fn, TVI_ROOT);
+            }
+        }
+
+        // Update Global File Path
+        global::currentFilePath = target.filePath;
+
+        // Update Window Title
+        std::wstring title = L"MINDTREE";
+        if (!global::currentFilePath.empty()) {
+            title += L" - " + global::currentFilePath;
+        }
+        else {
+            title += L" - " + target.title;
+        }
+        if (global::HOME) SetWindowText(global::HOME, title.c_str());
+
+        // Reset operation history when changing pages (history is per active document/page).
+        HistorySystem::Instance().ResetToSnapshot(CreateSnapshot());
+    }
+
+    // Add a new paint (canvas) to the current page
+    void AddNewPaint() {
+        if (currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
         
+        PageInfo& page = pages[currentPageIndex];
+        
+        // Sync current active paint before adding new one
+        if (page.activePaintIndex >= 0 && page.activePaintIndex < page.paints.size()) {
+            page.paints[page.activePaintIndex].root = root;
+            page.paints[page.activePaintIndex].freeNodes = freeNodes;
+            page.paints[page.activePaintIndex].nextId = nextId;
+        }
+
+        PaintInfo p;
+        p.id = page.paints.size() + 1; // Simple ID generation
+        p.nextId = 1;
+        p.root = new MindNode(p.nextId++, L"Central Topic");
+        p.freeNodes.clear();
+        p.title = L"Paint " + std::to_wstring(page.paints.size() + 1);
+        
+        page.paints.push_back(std::move(p));
+        
+        // Switch to the new paint
+        SwitchToPaint(page.paints.size() - 1);
+    }
+
+    // Add a new paint (canvas) to the current page, using a specific node as the root
+    void AddNewPaintFromNode(MindNode* sourceNode) {
+        if (!sourceNode || currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
+        
+        PageInfo& page = pages[currentPageIndex];
+        
+        // Sync current active paint before adding new one
+        if (page.activePaintIndex >= 0 && page.activePaintIndex < page.paints.size()) {
+            page.paints[page.activePaintIndex].root = root;
+            page.paints[page.activePaintIndex].freeNodes = freeNodes;
+            page.paints[page.activePaintIndex].nextId = nextId;
+        }
+
+        PaintInfo p;
+        p.id = page.paints.size() + 1;
+        // Use the current page's nextId or the source node's context nextId? 
+        // Since we are sharing nodes, we should probably continue using the page's or manager's ID sequence 
+        // to avoid conflicts if we add new nodes here. 
+        // For now, initializing with a safe value or copying current nextId is acceptable.
+        p.nextId = nextId; 
+        
+        // DIRECTLY use the sourceNode as the root. 
+        // This enables synchronization because they point to the same object.
+        p.root = sourceNode;
+        
+        p.freeNodes.clear();
+        p.title = sourceNode->text.empty() ? (L"Paint " + std::to_wstring(page.paints.size() + 1)) : sourceNode->text;
+        
+        page.paints.push_back(std::move(p));
+        
+        // Switch to the new paint
+        SwitchToPaint(page.paints.size() - 1);
+    }
+
+    void SwitchToPaint(int paintIndex) {
+        if (currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
+        PageInfo& page = pages[currentPageIndex];
+        
+        if (paintIndex < 0 || paintIndex >= page.paints.size()) return;
+
+        // Sync current active paint before switching
+        if (page.activePaintIndex >= 0 && page.activePaintIndex < page.paints.size()) {
+            page.paints[page.activePaintIndex].root = root;
+            page.paints[page.activePaintIndex].freeNodes = freeNodes;
+            page.paints[page.activePaintIndex].nextId = nextId;
+        }
+
+        page.activePaintIndex = paintIndex;
+        PaintInfo& activePaint = page.paints[paintIndex];
+        
+        root = activePaint.root;
+        freeNodes = activePaint.freeNodes;
+        nextId = activePaint.nextId;
+
         // Update UI
         if (global::G_TREEVIEW) {
             TreeView_DeleteAllItems(global::G_TREEVIEW);
@@ -1007,27 +1153,35 @@ public:
             }
         }
         
-        // Update Global File Path
-        global::currentFilePath = target.filePath;
-        
-        // Update Window Title
-        std::wstring title = L"MINDTREE";
-        if (!global::currentFilePath.empty()) {
-            title += L" - " + global::currentFilePath;
-        } else {
-            title += L" - " + target.title;
+        // Update CLOTH Tab Control if it exists
+        if (global::CLOTH) {
+            TabCtrl_SetCurSel(global::CLOTH, paintIndex);
         }
-        if (global::HOME) SetWindowText(global::HOME, title.c_str());
 
-        // Reset operation history when changing pages (history is per active document/page).
+        // Reset operation history for the new context
         HistorySystem::Instance().ResetToSnapshot(CreateSnapshot());
     }
-    
     int GetPageCount() const { return pages.size(); }
-    
+    int GetCurrentPageIndex() const { return currentPageIndex; }
+
+    int GetPaintCount() {
+        if (currentPageIndex >= 0 && currentPageIndex < pages.size()) {
+            return (int)pages[currentPageIndex].paints.size();
+        }
+        return 0;
+    }
+
     std::wstring GetPageTitle(int index) {
         if (index >= 0 && index < pages.size()) {
             return pages[index].title;
+        }
+    }
+
+    std::wstring GetPaintTitle(int index) {
+        if (currentPageIndex >= 0 && currentPageIndex < pages.size()) {
+            if (index >= 0 && index < pages[currentPageIndex].paints.size()) {
+                return pages[currentPageIndex].paints[index].title;
+            }
         }
         return L"";
     }
@@ -1041,6 +1195,94 @@ public:
     void UpdateCurrentPageFilePath(const std::wstring& path) {
         if (currentPageIndex >= 0 && currentPageIndex < pages.size()) {
             pages[currentPageIndex].filePath = path;
+        }
+    }
+
+    void DeletePage(int index) {
+        if (index < 0 || index >= pages.size()) return;
+        pages.erase(pages.begin() + index);
+        if (pages.empty()) {
+            AddNewPage(); // Ensure at least one page
+        } else {
+            if (currentPageIndex >= index) {
+                currentPageIndex = (currentPageIndex > 0) ? currentPageIndex - 1 : 0;
+            }
+            // Adjust currentPageIndex if it was pointing to the deleted one or after
+            if (currentPageIndex >= pages.size()) currentPageIndex = pages.size() - 1;
+            
+            SwitchToPage(currentPageIndex);
+        }
+    }
+
+    void SetPageTitle(int index, const std::wstring& title) {
+        if (index >= 0 && index < pages.size()) {
+            pages[index].title = title;
+        }
+    }
+
+    void RenamePage(int index, std::wstring newTitle) {
+        if (index < 0 || index >= pages.size()) return;
+        
+        // Check extension
+        if (newTitle.find(L'.') == std::wstring::npos) {
+            newTitle += L".mt";
+        }
+        
+        pages[index].title = newTitle;
+        
+        // Update File Path
+        // If existing path has directory, keep it.
+        std::wstring oldPath = pages[index].filePath;
+        if (!oldPath.empty()) {
+            size_t lastSlash = oldPath.find_last_of(L"\\/");
+            if (lastSlash != std::wstring::npos) {
+                pages[index].filePath = oldPath.substr(0, lastSlash + 1) + newTitle;
+            } else {
+                pages[index].filePath = newTitle;
+            }
+        } else {
+            pages[index].filePath = newTitle;
+        }
+        
+        // Update Window Title if current
+        if (index == currentPageIndex) {
+             std::wstring wTitle = L"MINDTREE - " + pages[index].filePath;
+             if (global::HOME) SetWindowText(global::HOME, wTitle.c_str());
+        }
+    }
+
+    void DeletePaint(int index) {
+        if (currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
+        PageInfo& page = pages[currentPageIndex];
+        if (index < 0 || index >= page.paints.size()) return;
+        
+        page.paints.erase(page.paints.begin() + index);
+        
+        // Ensure at least one paint
+        if (page.paints.empty()) {
+            PaintInfo p;
+            p.id = 1;
+            p.nextId = 1;
+            p.root = new MindNode(p.nextId++, L"Central Topic");
+            p.freeNodes.clear();
+            p.title = L"Default Paint";
+            page.paints.push_back(p);
+            page.activePaintIndex = 0;
+        } else {
+            if (page.activePaintIndex >= index) {
+                page.activePaintIndex = (page.activePaintIndex > 0) ? page.activePaintIndex - 1 : 0;
+            }
+            if (page.activePaintIndex >= page.paints.size()) page.activePaintIndex = page.paints.size() - 1;
+        }
+        
+        SwitchToPaint(page.activePaintIndex);
+    }
+
+    void SetPaintTitle(int index, const std::wstring& title) {
+        if (currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
+        PageInfo& page = pages[currentPageIndex];
+        if (index >= 0 && index < page.paints.size()) {
+            page.paints[index].title = title;
         }
     }
 

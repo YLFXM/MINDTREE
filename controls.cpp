@@ -76,7 +76,7 @@ HWND CreateDropList(HWND Paarent, HINSTANCE hInstance, int ID, int x, int y, int
 		WS_EX_CLIENTEDGE,
 		WC_COMBOBOX,  // 下拉列表类名
 		L"",          // 下拉列表标题
-		WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST,  // 下拉列表样式
+		WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,  // 下拉列表样式
 		x,            // x 坐标
 		y,            // y 坐标
 		Width,        // 宽度

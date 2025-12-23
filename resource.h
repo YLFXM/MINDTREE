@@ -28,7 +28,7 @@
 #define IDC_treeview                    1006
 #define IDC_expclose                    1011
 #define IDC_TREE1                       1024
-#define IDM_TOOLS                       32774
+#define IDM_TOOLS                       32794
 #define ID_Menu                         32775
 #define IDM_OPENGUIDE                    32776
 #define IDI_RIGHT                       32777
@@ -107,6 +107,10 @@
 #define IDM_SIBLING_ALIGN               32902
 #define IDM_OPENTOOLS                   32903
 #define IDM_OPENSTYLE                   32904
+#define IDM_TAB_CLOSE                   32905
+#define IDM_ZOOM_DEC                    32800
+#define IDM_ZOOM_INC                    32801
+#define IDM_ZOOM_EDIT                   32802
 #define IDC_STATIC                      -1
 
 // Next default values for new objects

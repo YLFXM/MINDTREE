@@ -8,3 +8,9 @@ void Fguidelabel();
 void Setstyle(RECT home);
 void SetFILES(RECT home);
 void SetCLOTH(RECT home);
+void SetCanvas(RECT home);
+void UpdateZoomLabel(); // Added declaration
+
+// Update style panel UI with node properties
+struct MindNode;
+void UpdateStylePanelUI(MindNode* node);

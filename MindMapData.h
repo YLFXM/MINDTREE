@@ -35,12 +35,15 @@ struct MindNodeStyle {
     // 节点结构样式
     std::wstring nodeStructure;   // 节点结构样式: mindmap, tree, orgchart等
 
+    // 新增：是否手动定位
+    bool manualPosition;
+
     // 构造函数，设置默认值
     MindNodeStyle()
-        : borderWidth(1), fontSize(12), bold(false), italic(false), underline(false),
-        branchWidth(1) {
+        : borderWidth(1), fontSize(16), bold(false), italic(false), underline(false),
+        branchWidth(1), x(0), y(0), manualPosition(false) {
         // 设置默认值
-        shape = L"rectangle";
+        shape = L"rounded_rectangle";
         fillColor = L"#FFFFFF";
         borderColor = L"#000000";
         borderStyle = L"solid";
@@ -48,7 +51,7 @@ struct MindNodeStyle {
         textColor = L"#000000";
         textAlignment = L"center";
         branchColor = L"#000000";
-        nodeStructure = L"mindmap";
+        nodeStructure = L"default";
     }
 
     // 复制构造函数
@@ -68,6 +71,7 @@ struct MindNodeStyle {
         branchWidth = other.branchWidth;
         branchColor = other.branchColor;
         nodeStructure = other.nodeStructure;
+        manualPosition = other.manualPosition;
     }
 
     // 赋值运算符
@@ -88,6 +92,7 @@ struct MindNodeStyle {
             branchWidth = other.branchWidth;
             branchColor = other.branchColor;
             nodeStructure = other.nodeStructure;
+            manualPosition = other.manualPosition;
         }
         return *this;
     }
